@@ -9,8 +9,6 @@ digit5 = mnist.train.images[mnist.train.labels==d5]
 digit7 = mnist.train.images[mnist.train.labels==d7]
 mean5 = np.mean(digit5,0)
 mean7 = np.mean(digit7,0)
-# mean5[mean5<0.2]=0
-# mean7[mean7<0.2]=0
 corr = np.abs(mean7.reshape(28,28)-mean5.reshape(28,28))/2
 corr[corr<0.2]=0
 plt.imshow(corr,cmap='seismic')

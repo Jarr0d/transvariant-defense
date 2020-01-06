@@ -7,17 +7,24 @@ from PIL import Image
 
 
 # settings
+# data
 data1 = 5
 data2 = 7
-eps = 0.2
+# training
 lmd_1 = 0.3
 lmd_2 = 0.02
-lmd_3 = 1.0
+beta = 1.0
 lr = 0.01
 batch_size = 128
 img_size = 28
 crop_size = 26
 epochs = 5
+# attack
+eps = 0.2
+random_start = True
+k = 40
+a = 0.01
+
 
 # plot data correlation
 mnist = input_data.read_data_sets('MNIST_data', one_hot=False)
@@ -31,6 +38,7 @@ plt.imshow(corr, cmap='seismic')
 plt.show()
 
 x = tf.placeholder(tf.float32, shape=(None, img_size*img_size))
+x_adv = tf.placeholder(tf.float32, shape=(None, img_size*img_size))
 y = tf.placeholder(tf.float32, shape=(None))
 
 # standard training
@@ -44,25 +52,25 @@ y = tf.placeholder(tf.float32, shape=(None))
 # loss = tf.reduce_mean(err) + lmd_1/2*tf.norm(w, ord=2)
 
 # Madry adv. training
-# w = np.random.randn(img_size**2)
-# w0 = w / np.linalg.norm(w, ord=2)
-# w = tf.Variable(np.asarray(w0, dtype='float32'), name="weights")
-#
-# pred = tf.reduce_sum(w*x, 1)
-# err = tf.clip_by_value(tf.ones_like(pred) - y*pred + eps*tf.norm(w, ord=1), 0, 20*batch_size)
-# acc = tf.reduce_mean(tf.cast(tf.equal(y,tf.sign(pred)),tf.float32))
-# loss = tf.reduce_mean(err) + lmd_2/2*tf.norm(w, ord=2)
-
-# TRADES adv. training
 w = np.random.randn(img_size**2)
 w0 = w / np.linalg.norm(w, ord=2)
 w = tf.Variable(np.asarray(w0, dtype='float32'), name="weights")
 
 pred = tf.reduce_sum(w*x, 1)
-err = tf.clip_by_value(tf.ones_like(pred) - y*pred, 0, 20*batch_size)
-err_reg = tf.clip_by_value(tf.ones_like(pred) - pred*pred + tf.abs(pred)*eps*tf.norm(w, ord=1), 0, 20*batch_size)
+err = tf.clip_by_value(tf.ones_like(pred) - y*pred + eps*tf.norm(w, ord=1), 0, 20*batch_size)
 acc = tf.reduce_mean(tf.cast(tf.equal(y,tf.sign(pred)),tf.float32))
-loss = tf.reduce_mean(err) + lmd_2/2*tf.norm(w, ord=2) + lmd_3*tf.reduce_mean(err_reg)
+loss = tf.reduce_mean(err) + lmd_2/2*tf.norm(w, ord=2)
+
+# TRADES adv. training
+# w = np.random.randn(img_size**2)
+# w0 = w / np.linalg.norm(w, ord=2)
+# w = tf.Variable(np.asarray(w0, dtype='float32'), name="weights")
+#
+# pred = tf.reduce_sum(w*x, 1)
+# err = tf.clip_by_value(tf.ones_like(pred) - y*pred, 0, 20*batch_size)
+# err_reg = tf.clip_by_value(tf.ones_like(pred) - pred*pred/beta + tf.abs(pred)*eps*tf.norm(w, ord=1)/beta, 0, 20*batch_size)
+# acc = tf.reduce_mean(tf.cast(tf.equal(y,tf.sign(pred)),tf.float32))
+# loss = tf.reduce_mean(err) + lmd_2/2*tf.norm(w, ord=2) + tf.reduce_mean(err_reg)
 
 # Ours
 # w = np.random.randn(crop_size**2)
@@ -120,15 +128,41 @@ digit5 = mnist.test.images[mnist.test.labels == data1]
 digit7 = mnist.test.images[mnist.test.labels == data2]
 x_test = np.concatenate([digit5, digit7], 0)
 y_test = [-1]*len(digit5) + [1]*len(digit7)
+# attack
+# for TRADES
+# loss = tf.reduce_mean(
+#     tf.clip_by_value(
+#         tf.ones_like(tf.reduce_sum(w*x_adv, 1))-tf.reduce_sum(w*x_adv, 1)*tf.reduce_sum(w*x, 1), 0, 20*batch_size)
+# )
+# grad_op = tf.gradients(loss, x_adv)[0]
+# for others
+grad_op = tf.gradients(loss, x)[0]
+if random_start:
+    # for others
+    x_test_adv = x_test + np.random.uniform(-eps, eps, x_test.shape)
+    # for TRADES
+    # x_test_adv = x_test + 0.001*np.random.standard_normal(x_test.shape)
+else:
+    x_test_adv = np.copy(x_test)
+for i in range(k):
+    # for TRADES
+    # grad = sess.run(grad_op, feed_dict={x: x_test, x_adv: x_test_adv, y: y_test})
+    # for others
+    grad = sess.run(grad_op, feed_dict={x: x_test_adv, y: y_test})
+    x_test_adv += a * np.sign(grad)
+    x_test_adv = np.clip(x_test_adv, x_test - eps, x_test + eps)
+    x_test_adv = np.clip(x_test_adv, 0, 1) # ensure valid pixel range
+
 test_acc = sess.run(acc, {x:x_test, y:y_test})
-print('test acc: {}'.format(test_acc))
+test_robustness = sess.run(acc, {x:x_test_adv, y:y_test})
+print('test acc: {}, test robustness: {}'.format(test_acc, test_robustness))
 
 # np.save('corr_madry', corr)
 # np.save('w_madry', sess.run(w))
 
 # weight visualization
 weight = sess.run(w)
-weight = weight / np.linalg.norm(weight, ord=2)
+eta = np.mean(np.matmul(x_test, weight)) / beta * eps
 size = int(np.sqrt(weight.size))
 weight = weight.reshape(size, size)
 # interplote to img_size*img_size
@@ -207,3 +241,4 @@ plt.semilogx(robust_acc,'r--')
 plt.show()
 
 np.save('robust_acc_train', robust_acc)
+
